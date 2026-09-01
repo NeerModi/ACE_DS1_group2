@@ -8,12 +8,15 @@ This file contains the LLM class for the project.
 """
 import time
 import random
+import os
 from datetime import datetime
 import openai
+import tiktoken
 from logger import log_llm_call, log_problematic_request
 
 def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_tokens=4096, log_dir=None,
-                   sleep_seconds=15, retries_on_timeout=1000, attempt=1, use_json_mode=False):
+                   sleep_seconds=None, retries_on_timeout=None, attempt=1, use_json_mode=False,
+                   temperature=None):
     """
     Make a timed LLM call with error handling and retry logic.
     
@@ -45,6 +48,16 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
         - Training: ("INCORRECT_DUE_TO_EMPTY_RESPONSE, INCORRECT_DUE_TO_EMPTY_RESPONSE, ...", call_info)
         - Testing: ("INCORRECT_DUE_TO_EMPTY_RESPONSE, INCORRECT_DUE_TO_EMPTY_RESPONSE, ...", call_info)
     """
+    # Environment overrides make rate-limit behavior tunable without changing ACE roles.
+    if sleep_seconds is None:
+        sleep_seconds = float(os.getenv("ACE_RETRY_BASE_SECONDS", "1"))
+    if retries_on_timeout is None:
+        retries_on_timeout = int(os.getenv("ACE_MAX_RETRIES", "5"))
+    if retries_on_timeout < 0:
+        raise ValueError("ACE_MAX_RETRIES must be non-negative")
+    if temperature is None:
+        temperature = float(os.getenv("ACE_TEMPERATURE", "0.0"))
+
     start_time = time.time()
     prompt_time = time.time()
     
@@ -67,7 +80,7 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
             api_params = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
+                "temperature": temperature,
                 max_tokens_key: max_tokens
             }
             
@@ -89,6 +102,11 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
             if response_content is None:
                 raise Exception("API returned None content")
             
+            usage = getattr(response, "usage", None)
+            provider_prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            provider_completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+            # cl100k_base is a local estimate, not a claim about the provider tokenizer.
+            local_encoding = tiktoken.get_encoding("cl100k_base")
             call_info = {
                 "role": role,
                 "call_id": call_id,
@@ -101,8 +119,12 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
                 "call_time": call_end - call_start,
                 "prompt_length": len(prompt),
                 "response_length": len(response_content),
-                "prompt_num_tokens": response.usage.prompt_tokens,
-                "response_num_tokens": response.usage.completion_tokens,
+                "prompt_num_tokens": provider_prompt_tokens,
+                "response_num_tokens": provider_completion_tokens,
+                "provider_prompt_tokens": provider_prompt_tokens,
+                "provider_completion_tokens": provider_completion_tokens,
+                "local_estimated_prompt_tokens": len(local_encoding.encode(prompt)),
+                "local_estimated_response_tokens": len(local_encoding.encode(response_content)),
             }
             
             print(f"[{role.upper()}] Call {call_id} completed in {total_time:.2f}s")
@@ -238,8 +260,9 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
                 else:
                     error_type = "timed out"
                     base_sleep = sleep_seconds
-                jitter = random.uniform(0.5, 1.5)  # Add jitter to avoid thundering herd
-                sleep_time = base_sleep * jitter
+                # Bounded exponential backoff with jitter avoids hammering free-tier limits.
+                jitter = random.uniform(0.5, 1.5)
+                sleep_time = min(base_sleep * (2 ** (attempt - 1)) * jitter, 60.0)
                 print(f"[{role.upper()}] Call {call_id} {error_type}, sleeping {sleep_time:.1f}s then retrying "
                       f"({attempt}/{retries_on_timeout})...")
                 time.sleep(sleep_time)
@@ -262,4 +285,6 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
             if log_dir:
                 log_llm_call(log_dir, call_info)
             
-            raise e
+            raise RuntimeError(
+                f"LLM call failed (provider = {api_provider}, model = {model}, call_id = {call_id}): {e}"
+            ) from e

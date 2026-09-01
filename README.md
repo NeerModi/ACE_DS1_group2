@@ -98,7 +98,7 @@ from ace import ACE
 from utils import initialize_clients
 
 # Initialize API clients
-api_provider = "sambanova" # or "together", "openai", "commonstack"
+api_provider = "sambanova" # or "together", "openai", "commonstack", "openrouter"
 
 # Initialize ACE system
 ace_system = ACE(
@@ -155,6 +155,63 @@ results = ace_system.run(
 )
 ```
 
+## Running ACE with OpenRouter
+
+OpenRouter is supported through the existing OpenAI-compatible chat-completions
+client; no paid OpenAI dependency is added. Create an OpenRouter key, then copy
+the example environment file and set only the key you own:
+
+```bash
+cp .env.example .env
+# In .env:
+OPENROUTER_API_KEY="..."
+# Optional attribution headers:
+OPENROUTER_HTTP_REFERER="https://your-project.example"
+OPENROUTER_X_TITLE="ACE BTP reproduction"
+```
+
+Choose a model that is currently marked free in the OpenRouter catalog. Free
+model names, availability, JSON-mode support, and rate limits can change, so
+pass the selected model explicitly for reproducibility. The `--free_experiment`
+switch is the small/free configuration: one epoch, one reflection round,
+curation every step, 1024 completion tokens, a 12,000-token playbook, and one
+evaluation worker. It does not change the normal research defaults.
+
+```bash
+uv run python -m eval.finance.run \
+    --task_name formula \
+    --mode offline \
+    --save_path results/openrouter_free \
+    --api_provider openrouter \
+    --generator_model <FREE_MODEL> \
+    --reflector_model <FREE_MODEL> \
+    --curator_model <FREE_MODEL> \
+    --free_experiment \
+    --max_train_samples 1 \
+    --max_val_samples 1 \
+    --max_test_samples 1 \
+    --skip_initial_test
+```
+
+The CLIs also use `OPENROUTER_FREE_MODEL` as a convenience default when
+`openrouter` is selected, but an explicit model name is safer. JSON mode sends
+OpenAI's `response_format={"type":"json_object"}` unchanged. Enable
+`--json_mode` only for a selected model that supports it; incompatible models
+fail with the provider error instead of producing a silently malformed ACE
+delta. `ACE_MAX_RETRIES` (default `5`), `ACE_RETRY_BASE_SECONDS` (default `1`),
+and `ACE_TEMPERATURE` (default `0.0`) are optional environment controls.
+
+For a real, exactly-one-request provider smoke test (not run by the ordinary
+test suite), set `RUN_OPENROUTER_SMOKE=1` and a current `OPENROUTER_FREE_MODEL`:
+
+```bash
+RUN_OPENROUTER_SMOKE=1 uv run python -m unittest tests.test_openrouter.OpenRouterIntegrationSmokeTest
+```
+
+Token counts in ACE's playbook budget use a local `cl100k_base` estimate. Logs
+record that estimate separately from provider-reported usage, which may be
+absent or use a different tokenizer on OpenRouter.
+
 ## 💼 Finance Domain Example
 
 ### Training Script Usage
@@ -201,7 +258,7 @@ uv run python -m eval.finance.run \
 | `--save_path` | Directory to save results | Required |
 | `--initial_playbook_path` | Path to initial playbook | Optional |
 | `--mode` | Run mode: 'offline' for offline training with validation, 'online' for online training and testing on test split, 'eval_only' for evaluation only | `offline` |
-| `--api_provider` | API provider for LLM calls. Choose from ['sambanova', 'together', 'openai', 'commonstack'] | `sambanova` |
+| `--api_provider` | API provider for LLM calls. Choose from ['sambanova', 'together', 'openai', 'commonstack', 'openrouter'] | `sambanova` |
 | `--num_epochs` | Number of training epochs | 1 |
 | `--max_num_rounds` | Max reflection rounds for incorrect answers | 3 |
 | `--curator_frequency` | Run curator every N steps | 1 |
@@ -211,6 +268,8 @@ uv run python -m eval.finance.run \
 | `--max_tokens` | Maximum tokens for LLM responses | 4096 |
 | `--playbook_token_budget` | Total token budget for playbook | 80000 |
 | `--test_workers` | Number of parallel workers for testing | 20 |
+| `--free_experiment` | Apply conservative free-tier settings; does not change normal defaults | False |
+| `--max_train_samples`, `--max_val_samples`, `--max_test_samples` | Optional split caps for smoke experiments; defaults preserve whole datasets | Unlimited |
 | `--generator_model` | Model for generator | `DeepSeek-V3.1` |
 | `--reflector_model` | Model for reflector | `DeepSeek-V3.1` |
 | `--curator_model` | Model for curator | `DeepSeek-V3.1` |

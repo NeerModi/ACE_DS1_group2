@@ -30,7 +30,7 @@ def parse_args():
     
     # Model configuration
     parser.add_argument("--api_provider", type=str, default="sambanova",
-                        choices=["sambanova", "together", "openai", "commonstack"], help="API provider")
+                        choices=["sambanova", "together", "openai", "commonstack", "openrouter"], help="API provider")
     parser.add_argument("--generator_model", type=str, 
                         default="DeepSeek-V3.1",
                         help="Model for generator")
@@ -74,6 +74,14 @@ def parse_args():
                         help="Total token budget for playbook")
     parser.add_argument("--test_workers", type=int, default=20,
                         help="Number of parallel workers for testing")
+    parser.add_argument("--free_experiment", action="store_true",
+                        help="Use conservative free-tier settings (1 epoch/round, 1024 tokens, 1 test worker)")
+    parser.add_argument("--max_train_samples", type=int, default=None,
+                        help="Optional cap on loaded train samples for a small smoke experiment")
+    parser.add_argument("--max_val_samples", type=int, default=None,
+                        help="Optional cap on loaded validation samples for a small smoke experiment")
+    parser.add_argument("--max_test_samples", type=int, default=None,
+                        help="Optional cap on loaded test samples for a small smoke experiment")
     
     # Prompt configuration
     parser.add_argument("--json_mode", action="store_true",
@@ -179,6 +187,19 @@ def load_initial_playbook(path):
 def main():
     """Main execution function."""
     args = parse_args()
+    if args.api_provider == "openrouter":
+        # Override this with explicit --*_model flags as free catalog entries change.
+        free_model = os.getenv("OPENROUTER_FREE_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+        for field in ("generator_model", "reflector_model", "curator_model"):
+            if getattr(args, field) == "DeepSeek-V3.1":
+                setattr(args, field, free_model)
+    if args.free_experiment:
+        args.num_epochs = 1
+        args.max_num_rounds = 1
+        args.curator_frequency = 1
+        args.max_tokens = 1024
+        args.playbook_token_budget = 12000
+        args.test_workers = 1
     
     print(f"\n{'='*60}")
     print(f"ACE SYSTEM")
@@ -197,6 +218,12 @@ def main():
         task_config[args.task_name],
         args.mode
     )
+    if args.max_train_samples is not None and train_samples is not None:
+        train_samples = train_samples[:args.max_train_samples]
+    if args.max_val_samples is not None and val_samples is not None:
+        val_samples = val_samples[:args.max_val_samples]
+    if args.max_test_samples is not None and test_samples is not None:
+        test_samples = test_samples[:args.max_test_samples]
         
     # Load initial playbook (or use empty if None provided)
     initial_playbook = load_initial_playbook(args.initial_playbook_path)

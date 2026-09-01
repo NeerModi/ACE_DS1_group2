@@ -37,14 +37,37 @@ def initialize_clients(api_provider):
         api_key = os.getenv('COMMONSTACK_API_KEY', '')
         if not api_key:
             raise ValueError("Commonstack api key not found in environment variables")
+    elif api_provider == "openrouter":
+        # OpenRouter implements the OpenAI chat-completions API.
+        base_url = "https://openrouter.ai/api/v1"
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            raise ValueError(
+                "OPENROUTER_API_KEY is not set. Add it to your .env file or environment variables."
+            )
     else:
         raise ValueError(
-            f"Invalid api_provider name: {api_provider}. Must be 'sambanova', 'together', 'openai', or 'commonstack'"
+            f"Invalid api_provider name: {api_provider}. Must be 'sambanova', 'together', 'openai', "
+            "'commonstack', or 'openrouter'"
         )
-        
-    generator_client = openai.OpenAI(api_key=api_key, base_url=base_url)
-    reflector_client = openai.OpenAI(api_key=api_key, base_url=base_url)
-    curator_client = openai.OpenAI(api_key=api_key, base_url=base_url)
+
+    client_kwargs = {"api_key": api_key, "base_url": base_url}
+    if api_provider == "openrouter":
+        # These attribution headers are optional, but recommended by OpenRouter.
+        default_headers = {
+            header: value
+            for header, value in {
+                "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER"),
+                "X-Title": os.getenv("OPENROUTER_X_TITLE"),
+            }.items()
+            if value
+        }
+        if default_headers:
+            client_kwargs["default_headers"] = default_headers
+
+    generator_client = openai.OpenAI(**client_kwargs)
+    reflector_client = openai.OpenAI(**client_kwargs)
+    curator_client = openai.OpenAI(**client_kwargs)
     
     print(f"Using {api_provider} API for all models")
     return generator_client, reflector_client, curator_client
@@ -157,6 +180,7 @@ def extract_answer(response):
     
 enc = tiktoken.get_encoding("cl100k_base")
 def count_tokens(prompt: str) -> int:
+    """Estimate tokens with cl100k_base; this is not exact for every provider model."""
     return len(enc.encode(prompt))
 
 

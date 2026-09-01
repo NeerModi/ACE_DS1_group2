@@ -9,6 +9,7 @@ import re
 import numpy as np
 from typing import List, Dict, Tuple, Any, Optional
 from collections import defaultdict
+from llm import timed_llm_call
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -73,6 +74,7 @@ class BulletpointAnalyzer:
         client,
         model: str,
         max_tokens: int = 4096,
+        api_provider: str = "openai",
         embedding_model_name: str = 'all-mpnet-base-v2'
     ):
         """
@@ -86,6 +88,7 @@ class BulletpointAnalyzer:
         """
         self.client = client
         self.model = model
+        self.api_provider = api_provider
         self.max_tokens = max_tokens
         self.embedding_model_name = embedding_model_name
         self.embedding_model = None
@@ -232,19 +235,12 @@ Requirements:
 Do NOT include any explanation, just output the merged bulletpoint."""
         
         try:
-            # Call LLM
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+            merged_content, _ = timed_llm_call(
+                self.client, self.api_provider, self.model, prompt,
+                role="bulletpoint_analyzer", call_id="bulletpoint_merge",
                 max_tokens=self.max_tokens,
-                temperature=0.3
+                temperature=0.3,
             )
-            
-            if hasattr(response.choices[0].message, 'content'):
-                merged_content = response.choices[0].message.content
-            else:
-                merged_content = str(response.choices[0].message)
-            
             merged_content = merged_content.strip()
             
             # Parse the merged bullet
